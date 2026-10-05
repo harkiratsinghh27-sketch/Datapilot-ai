@@ -46,3 +46,10 @@ test_*.js
 ngrok-temp.yml
 start_ngrok.js
 scripts/
+
+ngrok.exe
+ngrok.zip
+ngrok.log
+list_models.ts
+test_business_data.csv
+public/test_results/
