@@ -2,7 +2,7 @@ let db: any = null;
 
 function getDb() {
   if (!db) {
-    const duckdb = typeof window === 'undefined' ? require(String('duckdb')) : null;
+    const duckdb = typeof window === 'undefined' ? require('duckdb') : null;
     db = duckdb ? new duckdb.Database(':memory:') : null;
   }
   return db;
