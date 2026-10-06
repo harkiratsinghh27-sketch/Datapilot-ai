@@ -1,6 +1,7 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  serverExternalPackages: ['duckdb'],
   allowedDevOrigins: [
     "*.trycloudflare.com",
     "searching-effects-possibilities-kruger.trycloudflare.com",
