@@ -1,7 +1,12 @@
-// Evade Turbopack static analysis by requiring dynamically
-const duckdb = typeof window === 'undefined' ? require(String('duckdb')) : null;
+let db: any = null;
 
-const db = duckdb ? new duckdb.Database(':memory:') : null;
+function getDb() {
+  if (!db) {
+    const duckdb = typeof window === 'undefined' ? require(String('duckdb')) : null;
+    db = duckdb ? new duckdb.Database(':memory:') : null;
+  }
+  return db;
+}
 
 // Helper to convert BigInt to Number
 function serializeRow(row: any) {
@@ -18,7 +23,9 @@ function serializeRow(row: any) {
 
 export function runQuery(sql: string): Promise<any[]> {
   return new Promise((resolve, reject) => {
-    db.all(sql, (err: any, res: any) => {
+    const database = getDb();
+    if (!database) return reject(new Error("Database not initialized"));
+    database.all(sql, (err: any, res: any) => {
       if (err) {
         reject(err);
       } else {
