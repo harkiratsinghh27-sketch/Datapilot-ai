@@ -1,12 +1,7 @@
-import { GoogleGenAI } from '@google/genai';
-
-// Initialize SDK. It will automatically pick up GEMINI_API_KEY from environment
-const ai = new GoogleGenAI({});
-const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-
 export async function callLlm(systemInstruction: string, userPrompt: string): Promise<string> {
-  // If no API key, mock for offline tests
-  if (!process.env.GEMINI_API_KEY) {
+  // Use OpenRouter if available, otherwise fallback to mock
+  if (!process.env.OPENROUTER_API_KEY) {
+    console.warn("No OPENROUTER_API_KEY found, using mock response.");
     if (systemInstruction.includes("sql: one read-only SELECT")) {
       return JSON.stringify({
         sql: "SELECT * FROM data LIMIT 5",
@@ -22,17 +17,35 @@ export async function callLlm(systemInstruction: string, userPrompt: string): Pr
     }
   }
 
+  const modelName = process.env.OPENROUTER_MODEL || 'google/gemini-2.5-flash-free'; // OpenRouter alias for Gemini 2.5 flash
+
   try {
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents: userPrompt,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-      }
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: modelName,
+        response_format: { type: "json_object" },
+        messages: [
+          { role: "system", content: systemInstruction },
+          { role: "user", content: userPrompt }
+        ]
+      })
     });
 
-    return response.text || "{}";
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} ${errText}`);
+    }
+
+    const data = await response.json();
+    if (data.choices && data.choices.length > 0) {
+       return data.choices[0].message.content || "{}";
+    }
+    return "{}";
   } catch (error) {
     console.error("LLM Error:", error);
     throw error;

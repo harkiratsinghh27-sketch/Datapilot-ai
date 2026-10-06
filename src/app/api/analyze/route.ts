@@ -20,10 +20,10 @@ export async function POST(req: NextRequest) {
 
     // Call 1: Generate SQL
     const sqlSystemPrompt = `You are a careful data analyst. You receive a dataset schema, sample rows, column statistics, and a user question. Return a single JSON object with these keys:
-- sql: one read-only SELECT against a table named \`${tableName}\`. No DDL, no DML, no PRAGMA, no ATTACH, no semicolon-separated statements. Quote identifiers with double quotes. Always include a LIMIT 5000 if no smaller limit is needed.
+- sql: one read-only SELECT against a table named "${tableName}". No DDL, no DML, no PRAGMA, no ATTACH, no semicolon-separated statements. Quote identifiers with double quotes. Always include a LIMIT 5000 if no smaller limit is needed.
 - chart: { type, title, horizontal, x_label, y_label }. type is one of: bar, line, pie, doughnut, scatter, table, none. Use "none" for single-row results. Set horizontal true when category labels are long.
 - kpis: array of up to 4 { label, value } strings.
-If the user's question is conversational (e.g., "hello") or unrelated to the data, do not refuse to answer. Instead, generate {"sql": "SELECT * FROM \`${tableName}\` LIMIT 5", "chart": {"type": "none"}, "kpis": []}.
+If the user's question is conversational (e.g., "hello") or unrelated to the data, do not refuse to answer. Instead, generate {"sql": "SELECT * FROM \\"${tableName}\\" LIMIT 5", "chart": {"type": "none"}, "kpis": []}.
 Return ONLY the JSON object. No prose, no markdown fences.`;
 
     const sqlUserPrompt = `Dataset: ${cachedFile.filename}
