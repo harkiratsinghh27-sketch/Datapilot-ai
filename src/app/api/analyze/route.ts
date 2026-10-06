@@ -23,6 +23,7 @@ export async function POST(req: NextRequest) {
 - sql: one read-only SELECT against a table named \`${tableName}\`. No DDL, no DML, no PRAGMA, no ATTACH, no semicolon-separated statements. Quote identifiers with double quotes. Always include a LIMIT 5000 if no smaller limit is needed.
 - chart: { type, title, horizontal, x_label, y_label }. type is one of: bar, line, pie, doughnut, scatter, table, none. Use "none" for single-row results. Set horizontal true when category labels are long.
 - kpis: array of up to 4 { label, value } strings.
+If the user's question is conversational (e.g., "hello") or unrelated to the data, do not refuse to answer. Instead, generate {"sql": "SELECT * FROM \`${tableName}\` LIMIT 5", "chart": {"type": "none"}, "kpis": []}.
 Return ONLY the JSON object. No prose, no markdown fences.`;
 
     const sqlUserPrompt = `Dataset: ${cachedFile.filename}
@@ -91,7 +92,7 @@ Question: ${question}`;
     const resultColumns = resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
 
     // Call 2: Narrate result
-    const narrativeSystemPrompt = `You are a careful data analyst. You previously wrote a SQL query. Here is the result. Return ONLY a JSON object with keys \`narrative\`, \`kpis\`, and \`insights\`. Reference real numbers from the result. Do not invent values. If the result is empty, say so and suggest one valid follow-up. Return ONLY valid JSON, no markdown formatting.`;
+    const narrativeSystemPrompt = `You are a careful data analyst. You previously wrote a SQL query. Here is the result. Return ONLY a JSON object with keys \`narrative\`, \`kpis\`, and \`insights\`. Reference real numbers from the result. Do not invent values. If the result is empty, say so and suggest one valid follow-up. If the original question was a conversational greeting (like "hello" or "who are you"), reply naturally in the narrative field and leave insights empty. Return ONLY valid JSON, no markdown formatting.`;
     
     const narrativeUserPrompt = `SQL: ${finalSql}
 Result columns: ${JSON.stringify(resultColumns)}

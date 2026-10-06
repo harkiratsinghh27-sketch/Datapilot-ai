@@ -2,7 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 
 // Initialize SDK. It will automatically pick up GEMINI_API_KEY from environment
 const ai = new GoogleGenAI({});
-const modelName = process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+const modelName = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
 export async function callLlm(systemInstruction: string, userPrompt: string): Promise<string> {
   // If no API key, mock for offline tests
