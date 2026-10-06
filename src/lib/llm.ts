@@ -17,7 +17,7 @@ export async function callLlm(systemInstruction: string, userPrompt: string): Pr
     }
   }
 
-  const modelName = process.env.OPENROUTER_MODEL || 'google/gemini-2.0-flash-lite-preview-02-05:free';
+  const modelName = process.env.OPENROUTER_MODEL || 'openrouter/auto';
 
   try {
     const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
