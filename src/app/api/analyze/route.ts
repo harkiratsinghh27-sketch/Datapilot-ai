@@ -1,4 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { writeFile } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
 import { runQuery } from '@/lib/db';
 import { fileCache } from '@/lib/store';
 import { callLlm } from '@/lib/llm';
@@ -6,18 +9,49 @@ import { generateHeuristicSql, generateDeterministicNarrative } from '@/lib/heur
 
 export async function POST(req: NextRequest) {
   try {
-    const { file_id, question } = await req.json();
+    const { file_id, question, csv_content, filename } = await req.json();
 
     if (!file_id || !question) {
       return NextResponse.json({ detail: 'file_id and question are required' }, { status: 400 });
     }
 
-    const cachedFile = fileCache.get(file_id);
+    const tableName = `t_${file_id.replace(/-/g, '')}`;
+    let cachedFile = fileCache.get(file_id);
+
+    // Auto-rehydrate table on Vercel serverless cold-start if csv_content is provided
+    if (!cachedFile && csv_content) {
+      try {
+        const filePath = join(tmpdir(), `${file_id}.csv`);
+        await writeFile(filePath, Buffer.from(csv_content));
+        await runQuery(`CREATE TABLE IF NOT EXISTS ${tableName} AS SELECT * FROM read_csv_auto('${filePath}')`);
+        
+        const rowCountRes = await runQuery(`SELECT count(*) as count FROM ${tableName}`);
+        const rowCount = Number(rowCountRes[0]?.count || 0);
+        const schemaRes = await runQuery(`PRAGMA table_info('${tableName}')`);
+        const columns = schemaRes.map((r: any) => ({ name: r.name, type: r.type }));
+        const sampleRowsRes = await runQuery(`SELECT * FROM ${tableName} LIMIT 5`);
+
+        cachedFile = {
+          fileId: file_id,
+          filename: filename || 'dataset.csv',
+          filePath,
+          profile: {
+            columns,
+            rowCount,
+            stats: {},
+            sampleRows: sampleRowsRes
+          }
+        };
+        fileCache.set(file_id, cachedFile);
+      } catch (rehydrateErr: any) {
+        console.warn('Serverless auto-rehydration failed:', rehydrateErr.message);
+      }
+    }
+
     if (!cachedFile) {
       return NextResponse.json({ detail: 'File not found or expired. Please upload again.' }, { status: 404 });
     }
 
-    const tableName = `t_${file_id.replace(/-/g, '')}`;
     const columns = cachedFile.profile.columns || [];
     const rowCount = cachedFile.profile.rowCount || 0;
 

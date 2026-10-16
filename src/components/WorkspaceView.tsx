@@ -47,11 +47,44 @@ export function WorkspaceView({ fileData, onReset }: WorkspaceViewProps) {
     }
 
     try {
-      const res = await fetch('/api/analyze', {
+      let currentFileId = fileData.file_id;
+      let res = await fetch('/api/analyze', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ file_id: fileData.file_id, question: query.trim() })
+        body: JSON.stringify({
+          file_id: currentFileId,
+          question: query.trim(),
+          csv_content: fileData.fileText,
+          filename: fileData.filename
+        })
       });
+
+      // If serverless container recycled or lost in-memory state, auto-reupload seamlessly
+      if (res.status === 404 && fileData.rawFile) {
+        try {
+          const formData = new FormData();
+          formData.append('file', fileData.rawFile);
+          const upRes = await fetch('/api/upload', { method: 'POST', body: formData });
+          if (upRes.ok) {
+            const upData = await upRes.json();
+            fileData.file_id = upData.file_id;
+            currentFileId = upData.file_id;
+            res = await fetch('/api/analyze', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                file_id: currentFileId,
+                question: query.trim(),
+                csv_content: fileData.fileText,
+                filename: fileData.filename
+              })
+            });
+          }
+        } catch (reupErr) {
+          console.warn('Silent reupload failed:', reupErr);
+        }
+      }
+
       const data = await res.json();
 
       if (!res.ok) {

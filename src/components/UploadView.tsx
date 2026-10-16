@@ -38,10 +38,15 @@ export function UploadView({ onUploadSuccess }: UploadViewProps) {
         body: formData
       });
       const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.detail || 'Upload failed');
+      let fileText: string | undefined = undefined;
+      if (file.size <= 4 * 1024 * 1024 && ['csv', 'tsv', 'json'].includes(ext || '')) {
+        try {
+          fileText = await file.text();
+        } catch (e) {
+          console.warn('Could not read file as text:', e);
+        }
       }
-      onUploadSuccess(data);
+      onUploadSuccess({ ...data, rawFile: file, fileText });
     } catch (err: any) {
       setError(err.message);
     } finally {
