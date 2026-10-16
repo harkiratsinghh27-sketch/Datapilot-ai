@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { runQuery } from '@/lib/db';
 import { fileCache } from '@/lib/store';
 import { callLlm } from '@/lib/llm';
+import { generateHeuristicSql, generateDeterministicNarrative } from '@/lib/heuristics';
 
 export async function POST(req: NextRequest) {
   try {
@@ -17,8 +18,10 @@ export async function POST(req: NextRequest) {
     }
 
     const tableName = `t_${file_id.replace(/-/g, '')}`;
+    const columns = cachedFile.profile.columns || [];
+    const rowCount = cachedFile.profile.rowCount || 0;
 
-    // Call 1: Generate SQL
+    // Call 1: Generate SQL via LLM with Deterministic Fallback
     const sqlSystemPrompt = `You are a careful data analyst. You receive a dataset schema, sample rows, column statistics, and a user question. Return a single JSON object with these keys:
 - sql: one read-only SELECT against a table named "${tableName}". No DDL, no DML, no PRAGMA, no ATTACH, no semicolon-separated statements. Quote identifiers with double quotes. Always include a LIMIT 5000 if no smaller limit is needed.
 - chart: { type, title, horizontal, x_label, y_label }. type is one of: bar, line, pie, doughnut, scatter, table, none. Use "none" for single-row results. Set horizontal true when category labels are long.
@@ -27,71 +30,64 @@ If the user's question is conversational (e.g., "hello") or unrelated to the dat
 Return ONLY the JSON object. No prose, no markdown fences.`;
 
     const sqlUserPrompt = `Dataset: ${cachedFile.filename}
-Rows: ${cachedFile.profile.rowCount}
-Columns: ${JSON.stringify(cachedFile.profile.columns)}
-Sample rows: ${JSON.stringify(cachedFile.profile.sampleRows)}
-Column profile: ${JSON.stringify(cachedFile.profile.stats)}
+Rows: ${rowCount}
+Columns: ${JSON.stringify(columns)}
+Sample rows: ${JSON.stringify(cachedFile.profile.sampleRows || [])}
+Column profile: ${JSON.stringify(cachedFile.profile.stats || {})}
 Question: ${question}`;
 
-    let sqlResponseText = await callLlm(sqlSystemPrompt, sqlUserPrompt);
-    sqlResponseText = sqlResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
+    let sqlData: any = null;
 
-    let sqlData: any;
     try {
+      let sqlResponseText = await callLlm(sqlSystemPrompt, sqlUserPrompt);
+      sqlResponseText = sqlResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
       sqlData = JSON.parse(sqlResponseText);
-    } catch (e) {
-      // Retry once if JSON is malformed
-      console.log("Malformed JSON from LLM, retrying...");
-      let retryResponse = await callLlm(sqlSystemPrompt, sqlUserPrompt + "\n\nWARNING: Your previous response was invalid JSON. You MUST return ONLY valid JSON.");
-      retryResponse = retryResponse.replace(/```json/g, '').replace(/```/g, '').trim();
-      try {
-        sqlData = JSON.parse(retryResponse);
-      } catch (e2) {
-         return NextResponse.json({ detail: 'AI failed to generate a valid response format.' }, { status: 500 });
-      }
+    } catch (llmErr: any) {
+      console.warn("LLM SQL generation failed or rate-limited, switching to deterministic heuristic engine:", llmErr.message);
+      // Fallback seamlessly to deterministic engine
+      sqlData = generateHeuristicSql(question, tableName, columns, rowCount);
     }
 
-    const rawSql = sqlData.sql as string;
-    if (!rawSql) {
-      return NextResponse.json({ detail: 'AI failed to generate SQL.' }, { status: 500 });
+    if (!sqlData || !sqlData.sql) {
+      sqlData = generateHeuristicSql(question, tableName, columns, rowCount);
     }
 
-    // Validate SQL
+    let rawSql = String(sqlData.sql).trim();
+
+    // Basic SQL security & syntax validation
     const upperSql = rawSql.toUpperCase();
-    if (!upperSql.trim().startsWith('SELECT')) {
-       return NextResponse.json({ detail: 'Only SELECT queries are allowed.' }, { status: 400 });
-    }
     const forbidden = ['INSERT', 'UPDATE', 'DELETE', 'DROP', 'ALTER', 'CREATE', 'TRUNCATE', 'MERGE', 'PRAGMA', 'ATTACH', 'COPY', 'INSTALL', 'LOAD'];
-    for (const f of forbidden) {
-      if (upperSql.match(new RegExp(`\\b${f}\\b`))) {
-         return NextResponse.json({ detail: `Query contains forbidden keyword: ${f}` }, { status: 400 });
-      }
-    }
-    if (rawSql.includes(';')) {
-      // Very basic check for multiple statements
-      const parts = rawSql.split(';').filter(p => p.trim().length > 0);
-      if (parts.length > 1) {
-         return NextResponse.json({ detail: 'Multiple statements are not allowed.' }, { status: 400 });
-      }
+    const hasForbidden = forbidden.some(f => upperSql.match(new RegExp(`\\b${f}\\b`)));
+
+    if (!upperSql.startsWith('SELECT') || hasForbidden || rawSql.includes(';')) {
+      console.warn("Non-conforming SQL generated, replacing with safe heuristic SQL:", rawSql);
+      sqlData = generateHeuristicSql(question, tableName, columns, rowCount);
+      rawSql = sqlData.sql;
     }
 
     let finalSql = rawSql;
-    if (!upperSql.includes('LIMIT')) {
+    if (!finalSql.toUpperCase().includes('LIMIT')) {
       finalSql += ' LIMIT 5000';
     }
 
-    // Execute SQL
+    // Execute SQL with DuckDB (with self-healing fallback if query fails)
     let resultRows: any[] = [];
     try {
       const timeoutPromise = new Promise<any[]>((_, reject) => setTimeout(() => reject(new Error('Query timeout')), 10000));
       resultRows = await Promise.race([runQuery(finalSql), timeoutPromise]);
-    } catch (e: any) {
-      return NextResponse.json({ detail: `SQL Error: ${e.message}` }, { status: 400 });
+    } catch (sqlErr: any) {
+      console.warn(`Query execution failed (${sqlErr.message}), self-healing with deterministic schema query...`);
+      // Self-heal: LLM might have used an invalid column name
+      const heuristicFallback = generateHeuristicSql(question, tableName, columns, rowCount);
+      finalSql = heuristicFallback.sql;
+      sqlData.chart = heuristicFallback.chart;
+      resultRows = await runQuery(finalSql);
     }
 
     const resultColumns = resultRows.length > 0 ? Object.keys(resultRows[0]) : [];
 
-    // Call 2: Narrate result
+    // Call 2: Generate Narrative via LLM or Deterministic Narrative Engine
+    let narrData: any = null;
     const narrativeSystemPrompt = `You are a careful data analyst. You previously wrote a SQL query. Here is the result. Return ONLY a JSON object with keys \`narrative\`, \`kpis\`, and \`insights\`. Reference real numbers from the result. Do not invent values. If the result is empty, say so and suggest one valid follow-up. If the original question was a conversational greeting (like "hello" or "who are you"), reply naturally in the narrative field and leave insights empty. Return ONLY valid JSON, no markdown formatting.`;
     
     const narrativeUserPrompt = `SQL: ${finalSql}
@@ -99,42 +95,48 @@ Result columns: ${JSON.stringify(resultColumns)}
 Result rows (first 50): ${JSON.stringify(resultRows.slice(0, 50))}
 Original question: ${question}`;
 
-    let narrResponseText = await callLlm(narrativeSystemPrompt, narrativeUserPrompt);
-    narrResponseText = narrResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
-
-    let narrData: any;
     try {
+      let narrResponseText = await callLlm(narrativeSystemPrompt, narrativeUserPrompt);
+      narrResponseText = narrResponseText.replace(/```json/g, '').replace(/```/g, '').trim();
       narrData = JSON.parse(narrResponseText);
-    } catch (e) {
-       // deterministic fallback
-       narrData = {
-         narrative: `The query executed successfully and returned ${resultRows.length} rows.`,
-         kpis: [{ label: 'Result Rows', value: String(resultRows.length) }],
-         insights: []
-       };
+    } catch (narrErr: any) {
+      console.warn("LLM Narrative generation skipped or rate-limited, generating deterministic narrative:", narrErr.message);
+      narrData = generateDeterministicNarrative(question, finalSql, resultRows, resultColumns);
     }
 
-    // Build final chart spec
+    if (!narrData || !narrData.narrative) {
+      narrData = generateDeterministicNarrative(question, finalSql, resultRows, resultColumns);
+    }
+
+    // Normalize KPIs into an array of { label, value }
+    let normalizedKpis: Array<{ label: string; value: string | number }> = [];
+    if (Array.isArray(narrData.kpis)) {
+      normalizedKpis = narrData.kpis.filter((k: any) => k && typeof k === 'object' && k.label && k.value !== undefined);
+    } else if (narrData.kpis && typeof narrData.kpis === 'object') {
+      normalizedKpis = Object.entries(narrData.kpis).map(([k, v]) => ({ label: k.replace(/_/g, ' '), value: String(v) }));
+    } else if (Array.isArray(sqlData.kpis)) {
+      normalizedKpis = sqlData.kpis.filter((k: any) => k && typeof k === 'object' && k.label && k.value !== undefined);
+    }
+
+    // Build chart spec
     const chartSpec = sqlData.chart || { type: 'table' };
     if (chartSpec.type !== 'none' && chartSpec.type !== 'table' && resultRows.length > 0) {
-       // Attempt to map data into the chart spec if LLM didn't provide datasets array
-       // or if we need to hydrate it from resultRows
-       const stringCols = resultColumns.filter(c => typeof resultRows[0][c] === 'string');
-       const numCols = resultColumns.filter(c => typeof resultRows[0][c] === 'number');
-       
-       if (stringCols.length > 0 && numCols.length > 0) {
-         chartSpec.labels = resultRows.map(r => String(r[stringCols[0]]));
-         chartSpec.datasets = [{
-           label: numCols[0],
-           data: resultRows.map(r => r[numCols[0]])
-         }];
-       } else if (numCols.length >= 1) {
-         chartSpec.labels = resultRows.map((_, i) => `Row ${i+1}`);
-         chartSpec.datasets = [{
-           label: numCols[0],
-           data: resultRows.map(r => r[numCols[0]])
-         }];
-       }
+      const stringCols = resultColumns.filter(c => typeof resultRows[0][c] === 'string');
+      const numCols = resultColumns.filter(c => typeof resultRows[0][c] === 'number');
+      
+      if (stringCols.length > 0 && numCols.length > 0) {
+        chartSpec.labels = resultRows.map(r => String(r[stringCols[0]]));
+        chartSpec.datasets = [{
+          label: numCols[0],
+          data: resultRows.map(r => r[numCols[0]])
+        }];
+      } else if (numCols.length >= 1) {
+        chartSpec.labels = resultRows.map((_, i) => `Row ${i+1}`);
+        chartSpec.datasets = [{
+          label: numCols[0],
+          data: resultRows.map(r => r[numCols[0]])
+        }];
+      }
     }
 
     return NextResponse.json({
@@ -146,14 +148,14 @@ Original question: ${question}`;
       },
       answer: {
         narrative: narrData.narrative,
-        kpis: narrData.kpis || sqlData.kpis,
+        kpis: normalizedKpis,
         chart: chartSpec,
-        insights: narrData.insights || []
+        insights: Array.isArray(narrData.insights) ? narrData.insights : []
       }
     });
 
   } catch (error: any) {
-    console.error("Query error:", error);
+    console.error("Critical error in analyze route:", error);
     return NextResponse.json({ detail: error.message || 'An unexpected error occurred' }, { status: 500 });
   }
 }
