@@ -53,3 +53,11 @@ ngrok.log
 list_models.ts
 test_business_data.csv
 public/test_results/
+*.log
+AGENTS.md
+CLAUDE.md
+.agents/
+.claude/
+.cursor/
+.devin/
+
