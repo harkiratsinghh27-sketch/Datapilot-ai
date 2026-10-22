@@ -2,14 +2,14 @@
 
 > In-memory tabular data analytics engine with natural language querying, automated anomaly profiling, and self-healing SQL execution.
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-datapilot--ai.vercel.app-2563EB?style=flat)](https://datapilot-ai.vercel.app)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-datapilot--ai--sandy.vercel.app-2563EB?style=flat)](https://datapilot-ai-sandy.vercel.app)
 [![Next.js 16](https://img.shields.io/badge/Next.js-16.3-black?style=flat&logo=next.js)](https://nextjs.org/)
 [![React 19](https://img.shields.io/badge/React-19.2-blue?style=flat&logo=react)](https://react.dev/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0-3178C6?style=flat&logo=typescript)](https://www.typescriptlang.org/)
 [![DuckDB](https://img.shields.io/badge/Engine-DuckDB%20%2B%20AlaSQL-FFF000?style=flat)](https://duckdb.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
 
-**Live Production URL:** [https://datapilot-ai.vercel.app](https://datapilot-ai.vercel.app)
+**Live Production URL:** [https://datapilot-ai-sandy.vercel.app](https://datapilot-ai-sandy.vercel.app)
 
 ---
 
